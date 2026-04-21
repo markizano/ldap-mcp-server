@@ -1,6 +1,12 @@
+import os
+from dotenv import load_dotenv
+
 import kizano
 import ldap_mcp_server.server as server
 import ldap_mcp_server.cli as cli
+
+# Load environment variables from .env file
+load_dotenv()
 
 def main() -> int:
     '''

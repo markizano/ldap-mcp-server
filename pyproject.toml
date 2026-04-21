@@ -3,7 +3,7 @@ requires = ["setuptools>=80", "wheel", "setuptools-scm>=9"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kizano-mcp-ldap-server"
+name = "kizano-ldap-mcp-server"
 dynamic = ["version"]
 description = "MCP endpoint for talking to a configurable LDAP service"
 readme = "README.md"
@@ -12,6 +12,11 @@ authors = [{ name = "Markizano Draconus", email = "markizano@markizano.net" }]
 
 dependencies = [
     "kizano>=1.0.8",
+    "python-dotenv>=1.2.2",
+    "ldap3>=2.9.1",
+    "mcp>=1.0.0",
+    "starlette>=0.27.0",
+    "uvicorn>=0.23.0",
 ]
 
 [project.urls]
