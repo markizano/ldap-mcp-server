@@ -1,22 +1,40 @@
-from dotenv import load_dotenv
+"""LDAP MCP Server - MCP endpoint for LDAP directory operations.
 
-import kizano
-import ldap_mcp_server.server as server
-import ldap_mcp_server.cli as cli
+This module provides the main entry point for the LDAP MCP server.
+Environment variables are loaded from .env file on import.
+"""
+
+import logging
+import sys
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
-def main() -> int:
-    '''
-    Main entry point for this application.
-    Let's you run the MCP server for LDAP.
-    '''
-    kizano.log.setLevel(99)
-    kizano.Config.setAppName('ldap-mcp-server')
-    config = kizano.getConfig()
-    myMCPServer = cli.Cli(config)
-    myMCPServer.execute()
-    return 0
 
-__all__ = ["server", "cli"]
+def main() -> int:
+    """Main entry point for ldap-mcp-server command.
+
+    Parses CLI arguments, sets up logging, and starts the server.
+
+    Returns:
+        Exit code (0 for success, 1 for error)
+    """
+    from ldap_mcp_server.cli import parse_args
+    from ldap_mcp_server.server import serve
+
+    # Parse configuration
+    config = parse_args()
+
+    # Set up logging
+    logging.basicConfig(
+        level=config.log_level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        stream=sys.stderr,
+    )
+
+    # Start server
+    return serve(config)
+
+
+__all__ = ['main']

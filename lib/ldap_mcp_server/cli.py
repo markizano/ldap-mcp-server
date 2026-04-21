@@ -1,148 +1,154 @@
-'''
-Command line interface entrypoint for `ldap-mcp-server` command.
+"""Command-line interface for LDAP MCP Server.
 
-This module will be responsible for parsing command line arguments.
-'''
+This module parses CLI flags and merges them with environment-based configuration.
+CLI flags take precedence over environment variables.
+"""
 
-import os, sys
-from signal import signal, SIGINT
-from argparse import ArgumentParser, RawTextHelpFormatter
-from kizano import getLogger
-log = getLogger(__name__)
+import argparse
+import sys
+from ldap_mcp_server.config import Config
 
-import ldap_mcp_server
 
-def interrupt(signal, frame):
-    log.error('Caught ^C interrupt, exiting...')
-    sys.exit(signal)
+def parse_args(argv: list[str] | None = None) -> Config:
+    """Parse command-line arguments and build Config.
 
-class Cli(object):
-    '''
-    Usage: %(prog)s [options] [command]
-    '''
+    CLI flags take precedence over environment variables.
+    Environment variables are loaded via Config.from_env() as defaults.
 
-    def __init__(self, config: dict):
-        self.config = config
-        self.getOptions()
-        log.debug(f'Final config: {self.config}')
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:])
 
-    def getOptions(self) -> None:
-        '''
-        Gets command line arguments.
-        '''
-        options = ArgumentParser(
-            usage=self.__doc__,
-            formatter_class=RawTextHelpFormatter
-        )
+    Returns:
+        Config object with merged settings
+    """
+    # Load defaults from environment
+    env_cfg = Config.from_env()
 
-        options.add_argument(
-            '--log-level', '-l',
-            action='store',
-            dest='log_level',
-            help='How verbose should this application be?',
-            choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-            default='INFO',
-            type=str.upper
-        )
+    parser = argparse.ArgumentParser(
+        prog='ldap-mcp-server',
+        description='MCP server for LDAP directory operations',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Environment Variables (overridden by CLI flags):
+  LDAP_URI                  LDAP server URL (default: ldap://localhost:389)
+  LDAP_BIND_DN              Bind DN for service account
+  LDAP_BIND_PASSWORD        Bind password
+  MCP_HOST                  Host to bind to (default: 0.0.0.0)
+  MCP_PORT                  Port to listen on (default: 9090)
+  LOG_LEVEL                 Logging level (default: INFO)
+  LDAP_MCP_SERVER_API_KEY   API key for client authentication (SSE mode only)
 
-        options.add_argument(
-            '--version',
-            action='store_true',
-            dest='print_version',
-            help='Print version and exit.',
-        )
+Examples:
+  # stdio transport (no auth needed)
+  ldap-mcp-server --transport stdio --read-write
 
-        options.add_argument(
-            '--host',
-            action='store',
-            dest='host',
-            default=os.getenv('MCP_HOST', '0.0.0.0'),
-            help='MCP listen/bind address (defaults to $MCP_HOST, 0.0.0.0 if unset).',
-        )
-        options.add_argument(
-            '--port',
-            action='store',
-            dest='port',
-            default=os.getenv('MCP_PORT', '9090'),
-            help='MCP listen/bind address (defaults to $MCP_PORT, 9090 if unset).',
-        )
+  # SSE transport with API key
+  export LDAP_MCP_SERVER_API_KEY=secret123
+  ldap-mcp-server --transport sse --host 0.0.0.0 --port 9090
+        """
+    )
 
-        options.add_argument(
-            '--url',
-            action='store',
-            dest='url',
-            default=os.getenv('LDAP_URI', 'ldap://localhost:389'),
-            help='LDAP server URL such as ldap://localhost:389 or ldaps://ldap.example.com:636. Defaults to localhost. If unset, uses $LDAP_URI',
-        )
+    # Transport
+    parser.add_argument(
+        '--transport',
+        choices=['stdio', 'sse'],
+        default=env_cfg.transport,
+        help='Transport mode (default: sse)'
+    )
 
-        options.add_argument(
-            '--bind-dn',
-            action='store',
-            dest='bind_dn',
-            default=os.environ.get('LDAP_BIND_DN'),
-            help='Distinguished name used for LDAP bind.',
-        )
+    # Server binding (SSE mode)
+    parser.add_argument(
+        '--host',
+        default=env_cfg.host,
+        help=f'Host to bind to (default: {env_cfg.host})'
+    )
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=env_cfg.port,
+        help=f'Port to listen on (default: {env_cfg.port})'
+    )
 
-        options.add_argument(
-            '--bind-password',
-            action='store',
-            dest='bind_password',
-            default=os.environ.get('LDAP_BIND_PASSWORD'),
-            help='Password used for LDAP bind (or LDAP_BIND_PASSWORD env var).',
-        )
+    # LDAP connection
+    parser.add_argument(
+        '--url',
+        default=env_cfg.url,
+        help=f'LDAP server URL (default: {env_cfg.url})'
+    )
+    parser.add_argument(
+        '--bind-dn',
+        default=env_cfg.bind_dn,
+        help='Bind DN for service account'
+    )
+    parser.add_argument(
+        '--bind-password',
+        default=env_cfg.bind_password,
+        help='Bind password'
+    )
 
-        options.add_argument(
-            '--starttls',
-            action='store_true',
-            dest='starttls',
-            help='Upgrade ldap:// connection to TLS via StartTLS.',
-        )
+    # TLS options
+    parser.add_argument(
+        '--starttls',
+        action='store_true',
+        default=env_cfg.use_starttls,
+        help='Use StartTLS (cannot be used with ldaps://)'
+    )
+    parser.add_argument(
+        '--insecure',
+        action='store_true',
+        default=env_cfg.insecure_tls,
+        help='Skip TLS certificate verification (INSECURE)'
+    )
 
-        options.add_argument(
-            '--insecure',
-            action='store_true',
-            dest='insecure',
-            help='Skip TLS certificate verification (testing only).',
-        )
+    # Operation mode
+    parser.add_argument(
+        '--read-write',
+        action='store_true',
+        default=env_cfg.read_write,
+        help='Enable write operations (add, modify, delete)'
+    )
 
-        options.add_argument(
-            '--read-write',
-            action='store_true',
-            dest='read_write',
-            help='Enable add/modify/delete tools (default is read-only mode).',
-        )
+    # Timeouts
+    parser.add_argument(
+        '--timeout',
+        type=int,
+        default=env_cfg.timeout,
+        help=f'LDAP operation timeout in seconds (default: {env_cfg.timeout})'
+    )
 
-        options.add_argument(
-            '--timeout',
-            action='store',
-            dest='timeout',
-            type=int,
-            default=30,
-            help='Per-request LDAP timeout in seconds (default: 30).',
-        )
+    # Logging
+    parser.add_argument(
+        '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        default=env_cfg.log_level,
+        help=f'Logging level (default: {env_cfg.log_level})'
+    )
 
-        opts = options.parse_args()
+    args = parser.parse_args(argv)
 
-        if opts.print_version:
-            import ldap_mcp_server._version
-            print(f'ldap-mcp-server: {ldap_mcp_server._version.__version__}')
-            sys.exit(0)
+    # Build Config from parsed args (env vars already loaded as defaults)
+    cfg = Config(
+        transport=args.transport,
+        host=args.host,
+        port=args.port,
+        url=args.url,
+        bind_dn=args.bind_dn,
+        bind_password=args.bind_password,
+        use_starttls=args.starttls,
+        insecure_tls=args.insecure,
+        read_write=args.read_write,
+        timeout=args.timeout,
+        log_level=args.log_level.upper(),
+        api_key=env_cfg.api_key,  # API key only from env, not CLI
+    )
 
-        if not 'LOG_LEVEL' in os.environ:
-            os.environ['LOG_LEVEL'] = opts.log_level
-            log.setLevel(opts.log_level)
+    # Validate configuration
+    try:
+        cfg.validate()
+    except ValueError as e:
+        parser.error(str(e))
 
-        # Filter out None values so config file defaults are not overridden.
-        opts_dict = {k: v for k, v in vars(opts).items() if v is not None}
-        self.config.update(opts_dict)
+    return cfg
 
-    def execute(self):
-        '''
-        Interprets command line options and calls the subsequent actions to take.
-        These will be built out as sub-modules to this module.
-        '''
-        log.info('Welcome to LDAP MCP Server!')
-        signal(SIGINT, interrupt)
-        return ldap_mcp_server.server.serve(self.config)
 
-__all__ = ['Cli']
+__all__ = ['parse_args']
