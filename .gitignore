@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
+lib/ldap_mcp_server/_version.py
 
 # Virtual environments
 .venv
