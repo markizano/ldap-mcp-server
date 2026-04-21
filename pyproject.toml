@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=80", "wheel", "setuptools-scm>=9"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kizano-mcp-ldap-server"
+dynamic = ["version"]
+description = "MCP endpoint for talking to a configurable LDAP service"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Markizano Draconus", email = "markizano@markizano.net" }]
+
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/markizano/ldap-mcp-server"
+Repository = "https://github.com/markizano/ldap-mcp-server"
+Issues = "https://github.com/markizano/ldap-mcp-server/issues"
+
+[project.scripts]
+ldap-mcp-server = "ldap_mcp_server:main"
+
+[tool.setuptools_scm]
+tag_regex = "^v(?P<version>.+)$"
+version_scheme = "no-guess-dev"
+local_scheme = "node-and-date"
+write_to = "lib/ldap_mcp_server/_version.py"
+write_to_template = "__version__ = \"{version}\"\n"
+
+[tool.setuptools.package-dir]
+ldap_mcp_server = "lib/ldap_mcp_server"
+
+[tool.setuptools.packages.find]
+where = ["lib"]
