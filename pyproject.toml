@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Markizano Draconus", email = "markizano@markizano.net" }]
 
-dependencies = []
+dependencies = [
+    "kizano>=1.0.8",
+]
 
 [project.urls]
 Homepage = "https://github.com/markizano/ldap-mcp-server"
