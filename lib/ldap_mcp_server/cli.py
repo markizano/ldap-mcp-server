@@ -52,27 +52,34 @@ class Cli(object):
             help='Print version and exit.',
         )
 
-        mcp_port = os.environ.get('MCP_PORT', '8080')
-        default_addr = mcp_port if mcp_port.startswith(':') else f':{mcp_port}'
         options.add_argument(
-            '--addr', '-addr',
+            '--host',
             action='store',
-            dest='addr',
-            default=default_addr,
-            help='MCP listen address (default :8080, overridable via MCP_PORT).',
+            dest='host',
+            default=os.getenv('MCP_HOST', '0.0.0.0'),
+            help='MCP listen/bind address (defaults to $MCP_HOST, 0.0.0.0 if unset).',
+        )
+        options.add_argument(
+            '--port',
+            action='store',
+            dest='port',
+            default=os.getenv('MCP_PORT', '9090'),
+            help='MCP listen/bind address (defaults to $MCP_PORT, 9090 if unset).',
         )
 
         options.add_argument(
             '--url',
             action='store',
             dest='url',
-            help='LDAP server URL such as ldap://host:389 or ldaps://host:636.',
+            default=os.getenv('LDAP_URI', 'ldap://localhost:389'),
+            help='LDAP server URL such as ldap://localhost:389 or ldaps://ldap.example.com:636. Defaults to localhost. If unset, uses $LDAP_URI',
         )
 
         options.add_argument(
             '--bind-dn',
             action='store',
             dest='bind_dn',
+            default=os.environ.get('LDAP_BIND_DN'),
             help='Distinguished name used for LDAP bind.',
         )
 
@@ -118,7 +125,7 @@ class Cli(object):
 
         if opts.print_version:
             import ldap_mcp_server._version
-            print(f'mkzforge: {ldap_mcp_server._version.__version__}')
+            print(f'ldap-mcp-server: {ldap_mcp_server._version.__version__}')
             sys.exit(0)
 
         if not 'LOG_LEVEL' in os.environ:

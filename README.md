@@ -17,10 +17,9 @@ originally written in Go.
 - Environment variable support via `.env` files with python-dotenv.
 
 ## Requirements
-
 - Python 3.11 or newer
 - Access to an LDAP server (OpenLDAP, Active Directory, etc.)
-- MCP client capable of speaking the SSE transport (e.g., Claude Desktop)
+- MCP client capable of speaking the SSE transport (e.g., Claude Desktop, OpenCode, etc.)
 
 ## Installation
 
@@ -43,14 +42,31 @@ Basic usage:
 
 ```bash
 ldap-mcp-server \
+  --host 0.0.0.0 \
+  --port 9090 \
   --url ldap://localhost:389 \
   --bind-dn "cn=admin,dc=example,dc=com" \
   --bind-password secret
 ```
 
+The server will start and listen for HTTP/SSE connections on the specified host and port.
+
+You should see output like:
+```
+2026-04-21 11:00:00 INFO: Starting LDAP MCP Server on 0.0.0.0:9090 (read-only mode)
+2026-04-21 11:00:00 INFO: LDAP URL: ldap://localhost:389
+2026-04-21 11:00:00 INFO: Connected to LDAP server successfully
+2026-04-21 11:00:00 INFO: Available tools: search_entries, get_entry
+2026-04-21 11:00:00 INFO: SSE endpoint: http://0.0.0.0:9090/sse
+2026-04-21 11:00:00 INFO: Messages endpoint: http://0.0.0.0:9090/messages
+INFO:     Started server process [12345]
+INFO:     Uvicorn running on http://0.0.0.0:9090 (Press CTRL+C to quit)
+```
+
 ### Command-Line Flags
 
-- `--addr`: MCP listen address (default `:8080`, overridable via `MCP_PORT` env var).
+- `--host`: Host to bind to (default `0.0.0.0`, overridable via `MCP_HOST` env var).
+- `--port`: Port to listen on (default `9090`, overridable via `MCP_PORT` env var).
 - `--url`: LDAP server URL such as `ldap://host:389` or `ldaps://host:636`.
 - `--bind-dn`: Distinguished name used for LDAP bind.
 - `--bind-password`: Password for LDAP bind (or use `LDAP_BIND_PASSWORD` environment variable).
@@ -68,14 +84,19 @@ The server supports loading configuration from a `.env` file in the current dire
 
 ```env
 # .env file example
-MCP_PORT=8080
+MCP_HOST=0.0.0.0
+MCP_PORT=9090
+LDAP_URI=ldap://localhost:389
+LDAP_BIND_DN=cn=admin,dc=example,dc=com
 LDAP_BIND_PASSWORD=secret
 LOG_LEVEL=INFO
 ```
 
 Environment variables:
-
-- `MCP_PORT`: Port to listen on (overrides `--addr` flag port)
+- `MCP_HOST`: Host to bind to (overrides `--host` flag)
+- `MCP_PORT`: Port to listen on (overrides `--port` flag)
+- `LDAP_URI`: LDAP server URL (overrides `--url` flag)
+- `LDAP_BIND_DN`: Bind DN (overrides `--bind-dn` flag)
 - `LDAP_BIND_PASSWORD`: Bind password (alternative to `--bind-password`)
 - `LOG_LEVEL`: Logging level
 
@@ -92,9 +113,10 @@ ldap-mcp-server \
 ```
 
 Connect to LDAPS on custom port:
-
 ```bash
-MCP_PORT=9000 ldap-mcp-server \
+ldap-mcp-server \
+  --host 0.0.0.0 \
+  --port 9000 \
   --url ldaps://ldap.example.com:636 \
   --bind-dn "cn=service,dc=example,dc=com" \
   --read-write
@@ -188,6 +210,29 @@ This Python implementation provides feature parity with the original Go version:
 | SSE Transport | ✅ | ✅ |
 | Environment Variables | ✅ | ✅ |
 | `.env` File Support | ❌ | ✅ |
+
+## Connecting MCP Clients
+
+Once the server is running, you can connect MCP clients to it:
+
+### HTTP/SSE Endpoints
+
+- **SSE Connection:** `GET http://localhost:9090/sse`
+- **Post Messages:** `POST http://localhost:9090/messages`
+
+### Example Client Configuration (Claude Desktop)
+
+Add to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "ldap": {
+      "url": "http://localhost:9090/sse"
+    }
+  }
+}
+```
 
 ## License
 

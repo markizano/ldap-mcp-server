@@ -1,70 +1,15 @@
 """
-MCP server implementation for LDAP.
-
-This module implements the main MCP server with SSE transport.
+MCP server implementation for LDAP with HTTP/SSE transport.
 """
 
-from typing import Any
+from typing import Any, Dict, List
 
-from mcp.server import Server
-from mcp.server.sse import SseServerTransport
-from starlette.applications import Starlette
-from starlette.routing import Route
-from starlette.requests import Request
-from starlette.responses import Response
+from mcp.server.fastmcp import FastMCP
 from kizano import getLogger
 
-from ldap_mcp_server.ldap_client import LDAPClient
-from ldap_mcp_server.tools import Toolset
-from ldap_mcp_server.resources import ResourceSet
+from ldap_mcp_server.ldap_client import LDAPClient, LDAPNotFoundError, SearchScope, DerefAliases
 
 log = getLogger(__name__)
-
-
-def create_mcp_server(client: LDAPClient, read_write: bool) -> tuple[Server, Toolset, ResourceSet]:
-    """
-    Create and configure MCP server.
-
-    Args:
-        client: LDAP client instance
-        read_write: Whether to enable write operations
-
-    Returns:
-        Tuple of (Server instance, Toolset, ResourceSet)
-    """
-    server = Server("ldap-mcp")
-
-    toolset = Toolset(client)
-    resource_set = ResourceSet(client)
-
-    # Register list_tools handler
-    @server.list_tools()
-    async def list_tools_handler():
-        return toolset.get_tools(read_write)
-
-    # Register call_tool handler
-    @server.call_tool()
-    async def call_tool_handler(name: str, arguments: Any) -> list:
-        return await toolset.handle_tool(name, arguments or {})
-
-    # Register list_resources handler
-    @server.list_resources()
-    async def list_resources_handler():
-        return resource_set.get_resources()
-
-    # Register list_resource_templates handler
-    @server.list_resource_templates()
-    async def list_resource_templates_handler():
-        return resource_set.get_resource_templates()
-
-    # Register read_resource handler
-    @server.read_resource()
-    async def read_resource_handler(uri: str):
-        return await resource_set.handle_resource(uri)
-
-    log.info(f"MCP server created with {len(toolset.get_tools(read_write))} tools")
-    return server, toolset, resource_set
-
 
 def serve(cfg: dict) -> int:
     """
@@ -76,6 +21,8 @@ def serve(cfg: dict) -> int:
     Returns:
         Exit code
     """
+    ldap_client: LDAPClient = None
+
     # Extract configuration
     url = cfg.get('url')
     if not url:
@@ -88,16 +35,8 @@ def serve(cfg: dict) -> int:
     insecure = cfg.get('insecure', False)
     read_write = cfg.get('read_write', False)
     timeout = cfg.get('timeout', 30)
-    addr = cfg.get('addr', ':8080')
-
-    # Parse address
-    if addr.startswith(':'):
-        host = '0.0.0.0'
-        port = int(addr[1:])
-    else:
-        parts = addr.rsplit(':', 1)
-        host = parts[0] if len(parts) > 1 else '0.0.0.0'
-        port = int(parts[1]) if len(parts) > 1 else 8080
+    host = cfg.get('host', '0.0.0.0')
+    port = int(cfg.get('port', 8080))
 
     # Log startup info
     mode = "read-write" if read_write else "read-only"
@@ -111,12 +50,6 @@ def serve(cfg: dict) -> int:
     proto = "StartTLS" if starttls else url
     log.info(f"TLS mode: {proto} (insecure={insecure})")
 
-    available_tools = "search_entries, get_entry"
-    if read_write:
-        available_tools += ", add_entry, modify_entry, delete_entry"
-    log.info(f"Available tools: {available_tools}")
-    log.info("Available resources: ldap://root-dse, ldap://entry/{{dn}}")
-
     # Initialize LDAP client
     try:
         ldap_client = LDAPClient(
@@ -127,41 +60,193 @@ def serve(cfg: dict) -> int:
             insecure_tls=insecure,
             default_timeout=timeout,
         )
+        log.info("Connected to LDAP server successfully")
     except Exception as e:
         log.error(f"Failed to connect to LDAP server: {e}")
         return 1
 
-    # Create MCP server
-    app_server, toolset, resource_set = create_mcp_server(ldap_client, read_write)
-
-    # Create Starlette app for SSE
-    async def handle_sse(request: Request) -> Response:
-        """Handle SSE connections."""
-        async with SseServerTransport("/messages") as (read_stream, write_stream):
-            await app_server.run(
-                read_stream,
-                write_stream,
-                app_server.create_initialization_options(),
-            )
-        return Response("SSE connection closed", status_code=200)
-
-    async def handle_messages(request: Request) -> Response:
-        """Handle POST messages."""
-        return Response('{"status": "ok"}', media_type="application/json")
-
-    app = Starlette(
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Route("/messages", endpoint=handle_messages, methods=["POST"]),
-        ],
+    # Create FastMCP server
+    mcp = FastMCP(
+        name="ldap-mcp",
+        host=host,
+        port=port,
+        sse_path="/sse",
+        message_path="/messages",
     )
+
+    # Register search_entries tool
+    @mcp.tool()
+    async def search_entries(
+        base_dn: str,
+        filter: str,
+        scope: str = "sub",
+        attributes: List[str] = None,
+        size_limit: int = 0,
+        types_only: bool = False,
+        page_size: int = 0,
+        deref_aliases: str = "never"
+    ) -> Dict[str, Any]:
+        """
+        Execute an LDAP search operation.
+
+        Args:
+            base_dn: Base distinguished name for the search
+            filter: LDAP search filter (RFC 4515)
+            scope: Search scope (base, one, or sub)
+            attributes: Attributes to return (empty = all)
+            size_limit: Maximum entries to return (0 = server default)
+            types_only: Return only attribute types without values
+            page_size: Paging size (0 = no paging)
+            deref_aliases: Alias dereferencing (never, searching, finding, always)
+        """
+        try:
+            scope_enum = SearchScope(scope.lower())
+            deref_enum = DerefAliases(deref_aliases.lower())
+
+            entries = ldap_client.search(
+                base_dn=base_dn,
+                filter_string=filter,
+                scope=scope_enum,
+                attributes=attributes,
+                size_limit=size_limit,
+                types_only=types_only,
+                deref_aliases=deref_enum,
+                page_size=min(page_size, 2**32 - 1) if page_size > 0 else 0,
+            )
+
+            return {
+                "entries": entries,
+                "count": len(entries),
+            }
+        except LDAPNotFoundError as e:
+            return {"error": f"LDAP entry not found: {e}"}
+        except Exception as e:
+            log.error(f"search_entries error: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    # Register get_entry tool
+    @mcp.tool()
+    async def get_entry(
+        dn: str,
+        attributes: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Retrieve a single LDAP entry by DN.
+
+        Args:
+            dn: The distinguished name of the entry
+            attributes: Attributes to return (empty = all)
+        """
+        try:
+            entry = ldap_client.get_entry(dn, attributes)
+            return {"entry": entry}
+        except LDAPNotFoundError:
+            return {"error": "LDAP entry not found"}
+        except Exception as e:
+            log.error(f"get_entry error: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    # Register write tools if enabled
+    if read_write:
+        @mcp.tool()
+        async def add_entry(
+            dn: str,
+            attributes: Dict[str, List[str]]
+        ) -> Dict[str, Any]:
+            """
+            Create a new LDAP entry.
+
+            Args:
+                dn: Distinguished name for the new entry
+                attributes: Map of attribute names to string arrays
+            """
+            try:
+                ldap_client.add_entry(dn, attributes)
+                return {"success": True, "message": f"Entry {dn} created successfully"}
+            except Exception as e:
+                log.error(f"add_entry error: {e}", exc_info=True)
+                return {"error": str(e)}
+
+        @mcp.tool()
+        async def modify_entry(
+            dn: str,
+            changes: List[Dict[str, Any]]
+        ) -> Dict[str, Any]:
+            """
+            Modify attributes of an LDAP entry.
+
+            Args:
+                dn: The distinguished name of the entry
+                changes: List of modifications (operation, attribute, values)
+            """
+            try:
+                ldap_client.modify_entry(dn, changes)
+                return {"success": True, "message": f"Entry {dn} modified successfully"}
+            except Exception as e:
+                log.error(f"modify_entry error: {e}", exc_info=True)
+                return {"error": str(e)}
+
+        @mcp.tool()
+        async def delete_entry(dn: str) -> Dict[str, Any]:
+            """
+            Delete an LDAP entry by DN.
+
+            Args:
+                dn: The distinguished name to delete
+            """
+            try:
+                ldap_client.delete_entry(dn)
+                return {"success": True, "message": f"Entry {dn} deleted successfully"}
+            except Exception as e:
+                log.error(f"delete_entry error: {e}", exc_info=True)
+                return {"error": str(e)}
+
+    # Register root-dse resource
+    @mcp.resource("ldap://root-dse")
+    async def get_root_dse() -> str:
+        """Root DSE attributes for the LDAP server."""
+        try:
+            entry = ldap_client.read_root_dse(attributes=None)
+            import json
+            return json.dumps({"root_dse": entry}, indent=2)
+        except Exception as e:
+            log.error(f"get_root_dse error: {e}", exc_info=True)
+            return json.dumps({"error": str(e)})
+
+    # Register entry resource template
+    @mcp.resource("ldap://entry/{dn}")
+    async def get_ldap_entry(dn: str) -> str:
+        """Retrieve an LDAP entry by DN (URL-escaped)."""
+        try:
+            from urllib.parse import unquote
+            decoded_dn = unquote(dn)
+            entry = ldap_client.get_entry(decoded_dn, attributes=None)
+            import json
+            return json.dumps({"entry": entry}, indent=2)
+        except LDAPNotFoundError:
+            import json
+            return json.dumps({"error": f"LDAP entry not found: {dn}"})
+        except Exception as e:
+            log.error(f"get_ldap_entry error: {e}", exc_info=True)
+            import json
+            return json.dumps({"error": str(e)})
+
+    # Log available tools
+    available_tools = "search_entries, get_entry"
+    if read_write:
+        available_tools += ", add_entry, modify_entry, delete_entry"
+    log.info(f"Available tools: {available_tools}")
+    log.info("Available resources: ldap://root-dse, ldap://entry/{{dn}}")
+    log.info(f"SSE endpoint: http://{host}:{port}/sse")
+    log.info(f"Messages endpoint: http://{host}:{port}/messages")
 
     # Run server
     try:
-        import uvicorn
-        uvicorn.run(app, host=host, port=port, log_level="info")
+        mcp.run(transport='sse')
+        return 0
     except KeyboardInterrupt:
         log.info("Received shutdown signal")
+        return 0
     except Exception as e:
         log.error(f"Server error: {e}", exc_info=True)
         return 1
@@ -169,8 +254,6 @@ def serve(cfg: dict) -> int:
         if ldap_client:
             ldap_client.close()
         log.info("Server shutdown complete")
-
-    return 0
 
 
 __all__ = ['serve']

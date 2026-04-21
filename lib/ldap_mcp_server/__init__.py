@@ -13,6 +13,7 @@ def main() -> int:
     Let's you run the MCP server for LDAP.
     '''
     kizano.log.setLevel(99)
+    kizano.Config.setAppName('ldap-mcp-server')
     config = kizano.getConfig()
     myMCPServer = cli.Cli(config)
     myMCPServer.execute()
