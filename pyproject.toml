@@ -36,8 +36,8 @@ ldap-mcp-server = "ldap_mcp_server:main"
 
 [tool.setuptools_scm]
 tag_regex = "^v(?P<version>.+)$"
-version_scheme = "no-guess-dev"
-local_scheme = "node-and-date"
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
 write_to = "lib/ldap_mcp_server/_version.py"
 write_to_template = "__version__ = \"{version}\"\n"
 
